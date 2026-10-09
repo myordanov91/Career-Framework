@@ -55,21 +55,18 @@
   .canvas{padding:20px 26px 60px;overflow-x:auto}
   .tree{width:max-content;margin:0 auto;transform-origin:top center}
 
-  /* connectors */
-  .tree ul{position:relative;padding-top:24px;display:flex;justify-content:center}
-  .tree li{list-style:none;position:relative;padding:24px 12px 0;text-align:center;display:flex;flex-direction:column;align-items:center}
-  .tree li::before,.tree li::after{content:'';position:absolute;top:0;right:50%;width:50%;height:24px;border-top:var(--conn) solid var(--line)}
-  .tree li::after{right:auto;left:50%;border-left:var(--conn) solid var(--line)}
-  .tree li:only-child::before,.tree li:only-child::after{display:none}
-  .tree li:first-child::before,.tree li:last-child::after{border:0 none}
-  .tree li:last-child::before{border-right:var(--conn) solid var(--line)}
-  .tree ul ul::before{content:'';position:absolute;top:0;left:calc(50% - (var(--conn)/2));width:0;height:24px;border-left:var(--conn) solid var(--line)}
-  .tree>ul{padding-top:0}
+  /* connectors are drawn as an SVG overlay (see drawConnectors) for pixel-perfect alignment */
+  .tree{position:relative}
+  .tree ul{padding:24px 0 0;margin:0;display:flex;justify-content:center}
+  .tree li{list-style:none;padding:24px 12px 0;text-align:center;display:flex;flex-direction:column;align-items:center}
+  .tree>ul{padding:0}
   .tree>ul>li{padding-top:0}
-  .tree>ul>li::before,.tree>ul>li::after{display:none}
+  .conns{position:absolute;top:0;left:0;overflow:visible;pointer-events:none;z-index:0}
+  .conns line{stroke:var(--line);stroke-width:var(--conn);shape-rendering:crispEdges}
+  .tree .node,.tree .navcard,.tree .unit,.tree .leadbox{position:relative;z-index:1}
 
   .node{display:inline-block;vertical-align:top;text-align:left}
-  .apex{background:var(--teal);color:#fff;border-radius:10px;padding:12px 22px;min-width:230px;max-width:340px;text-align:center;box-shadow:var(--shadow)}
+  .apex{background:var(--teal);color:#fff;border-radius:10px;padding:12px 22px;min-width:230px;max-width:340px;text-align:center;box-shadow:var(--shadow);position:relative}
   .apex .role{font-weight:600;font-size:14.5px;line-height:1.25}
   .apex .meta{font-size:11px;opacity:.92;margin-top:3px}
   .apex a.role-link{color:#fff;border-bottom:1px solid rgba(255,255,255,.55)}
@@ -77,7 +74,7 @@
   .apex a.cf-apex{color:#fff;border-bottom:1.5px solid rgba(255,255,255,.6)}
 
   /* clickable summary cards (function / department) */
-  .navcard{background:#fff;border:1px solid var(--line);border-top:4px solid var(--teal);border-radius:10px;padding:14px 16px;min-width:190px;max-width:215px;box-shadow:var(--shadow);cursor:pointer;transition:transform .12s,box-shadow .12s;text-align:left}
+  .navcard{background:#fff;border:1px solid var(--line);border-top:4px solid var(--teal);border-radius:10px;padding:14px 16px;width:206px;box-shadow:var(--shadow);cursor:pointer;transition:transform .12s,box-shadow .12s;text-align:left}
   .navcard:hover{transform:translateY(-2px);box-shadow:0 5px 14px rgba(27,39,51,.13);border-color:var(--teal)}
   .navcard .ttl{font-weight:600;font-size:14px;color:var(--teal-d)}
   .navcard .hd{font-size:12px;color:var(--navy);margin-top:6px;font-weight:500}
@@ -324,7 +321,30 @@ function wire(){
 /* ---- zoom ---- */
 let USER_ZOOM=false;   // true once the user manually zooms; keeps auto-fit from overriding them
 function naturalW(){const t=document.querySelector('.tree');if(!t)return 0;const z=t.style.zoom;t.style.zoom=1;const w=t.offsetWidth;t.style.zoom=z||1;return w;}
-function applyZoom(){const t=document.querySelector('.tree');if(t)t.style.zoom=ZOOM;}
+function applyZoom(){const t=document.querySelector('.tree');if(t){t.style.zoom=ZOOM;drawConnectors();}}
+// Draw apex -> children connectors as an exact SVG overlay (measured from the real layout).
+function drawConnectors(){
+  const tree=document.querySelector('.tree'); if(!tree) return;
+  tree.querySelectorAll('svg.conns').forEach(s=>s.remove());
+  const apex=tree.querySelector(':scope > ul > li > .apex'); if(!apex) return;
+  const kids=[...tree.querySelectorAll(':scope > ul > li > ul > li')].map(li=>li.firstElementChild).filter(Boolean);
+  if(!kids.length) return;
+  const z=ZOOM||1, tr=tree.getBoundingClientRect();
+  const pos=el=>{const r=el.getBoundingClientRect();return {t:(r.top-tr.top)/z,b:(r.bottom-tr.top)/z,cx:((r.left+r.right)/2-tr.left)/z};};
+  const a=pos(apex), kp=kids.map(pos);
+  const childTop=Math.min(...kp.map(p=>p.t));
+  const railY=a.b+(childTop-a.b)/2;          // midway between apex bottom and card tops
+  const cxs=kp.map(p=>p.cx);
+  const minX=Math.min(a.cx,...cxs), maxX=Math.max(a.cx,...cxs);
+  const NS='http://www.w3.org/2000/svg';
+  const svg=document.createElementNS(NS,'svg'); svg.setAttribute('class','conns');
+  svg.setAttribute('width',Math.ceil(maxX+10)); svg.setAttribute('height',Math.ceil(childTop+10));
+  const ln=(x1,y1,x2,y2)=>{const l=document.createElementNS(NS,'line');l.setAttribute('x1',x1);l.setAttribute('y1',y1);l.setAttribute('x2',x2);l.setAttribute('y2',y2);svg.appendChild(l);};
+  ln(a.cx,a.b,a.cx,railY);                    // stem down from apex
+  if(maxX-minX>0.5) ln(minX,railY,maxX,railY);// horizontal rail (skipped for a single, aligned child)
+  kp.forEach(p=>ln(p.cx,railY,p.cx,p.t));     // drop into each card
+  tree.insertBefore(svg,tree.firstChild);
+}
 function avail(){const c=document.getElementById('canvas');const cs=getComputedStyle(c);return c.clientWidth-parseFloat(cs.paddingLeft)-parseFloat(cs.paddingRight);}
 // Fit the whole view to the visible width so there is no horizontal scrollbar on load.
 function autoZoom(){const nw=naturalW();if(!nw)return;USER_ZOOM=false;ZOOM=Math.min(1,avail()/nw);applyZoom();zlabel();}
